@@ -12,7 +12,9 @@ import {
   ProtocolRoute,
 } from "./protocols/router";
 import { X402Client } from "./protocols/x402/client";
+import { signEip3009TransferAuthorization } from "./protocols/x402/eip3009";
 import { AP2Client } from "./protocols/ap2/client";
+import { MPPClient } from "./protocols/mpp/client";
 import { sendEth, sendErc20, waitForConfirmation } from "./payments/web3/ethereum";
 import { executeWeb2Payment, Web2PaymentResult } from "./payments/web2/gateways";
 import { evaluatePolicy, PolicyResult } from "./policy/engine";
@@ -28,7 +30,8 @@ import {
   updateTransactionStatus,
   TransactionRecord,
 } from "./db/transactions";
-import type { Address, Hash } from "viem";
+import { retrieveAndDecrypt } from "./kms/aws-kms";
+import type { Address, Hash, Hex } from "viem";
 
 // ─── Initialize ─────────────────────────────────────────────────────────────
 
@@ -87,6 +90,7 @@ export interface PaymentExecutionResult {
   web2Result?: Web2PaymentResult;
   x402Result?: { data: unknown; txHash?: string; network?: string };
   ap2Result?: { mandate_id: string; transaction_id?: string; status: string };
+  mppResult?: { invoice_id: string; receipt_id?: string; status: string };
   policyResult: PolicyResult;
   confirmationRequired: boolean;
   confirmationPrompt?: string; // for chat channel
@@ -241,6 +245,17 @@ export async function executePayment(
         error: result.error,
         dryRun,
       };
+    } else if (route.paymentType === "mpp") {
+      const result = await executeMPPClientPayment(intent, walletKeyAlias, tx, dryRun);
+      return {
+        success: result.success,
+        tx,
+        policyResult,
+        confirmationRequired: policyResult.requiresHumanConfirmation,
+        mppResult: result.mppResult,
+        error: result.error,
+        dryRun,
+      };
     } else {
       // web2: stripe, paypal, visa, mastercard, googlepay, applepay
       const result = await executeWeb2Payment(route.gateway, intent);
@@ -335,7 +350,7 @@ async function executeWeb3Payment(
 
 async function executeX402ClientPayment(
   intent: PaymentIntent,
-  _walletKeyAlias: string,
+  walletKeyAlias: string,
   tx: TransactionRecord,
   dryRun: boolean
 ): Promise<{ success: boolean; txHash?: string; error?: string }> {
@@ -377,39 +392,79 @@ async function executeX402ClientPayment(
     network: details.network,
   });
 
-  // 2. Build & sign the EIP-3009 authorization
-  //    (Full signing requires the wallet private key + Viem EIP-3009 flow.
-  //     Below is the structural wiring; production signing is TODO.)
-  const payload = client.buildPaymentPayload(intent, details, "0x0", {
-    signature: "0x0",
-    from: "0x0",
-    to: details.payTo,
-    value: details.maxAmountRequired,
-    validAfter: "0",
-    validBefore: String(Math.floor(Date.now() / 1000) + 300),
-    nonce: String(Date.now()),
-  });
+  // 2. Decrypt the wallet private key through the configured KMS backend
+  //    (AWS KMS / OS Keyring / D-Bus Secret Service / GPG / Local AES).
+  //    `retrieveAndDecrypt` is the single choke-point for all provider types —
+  //    we never touch plaintext anywhere else.
+  let privateKey: Hex;
+  try {
+    privateKey = (await retrieveAndDecrypt(walletKeyAlias)) as Hex;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    updateTransactionStatus(tx.id, "failed", { error_message: `KMS decryption failed: ${msg}` });
+    auditLog("error", "kms", "key_decrypt_failed", {
+      tx_id: tx.id,
+      alias: walletKeyAlias,
+      error: msg,
+    });
+    return { success: false, error: `KMS decryption failed: ${msg}` };
+  }
 
-  // 3. Submit payment and get the resource + settlement proof
-  const { settlement } = await client.submitPayment(intent.recipient, payload);
+  // 3. Build & sign the EIP-3009 `TransferWithAuthorization`
+  const network = intent.network ?? details.network;
+  const now = Math.floor(Date.now() / 1000);
+  const validBefore = now + Math.max(60, details.maxTimeoutSeconds ?? 300);
 
-  updateTransactionStatus(tx.id, settlement.success ? "executed" : "failed", {
-    tx_hash: settlement.txHash,
-    error_message: settlement.error,
-  });
+  let signed;
+  try {
+    signed = await signEip3009TransferAuthorization({
+      privateKey,
+      network,
+      asset: details.asset,
+      to: details.payTo as Address,
+      valueBaseUnits: details.maxAmountRequired,
+      validAfterSec: 0,
+      validBeforeSec: validBefore,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    updateTransactionStatus(tx.id, "failed", { error_message: `EIP-3009 signing failed: ${msg}` });
+    auditLog("error", "payment", "x402_sign_failed", { tx_id: tx.id, error: msg });
+    return { success: false, error: `EIP-3009 signing failed: ${msg}` };
+  } finally {
+    // Best-effort zeroization — reassigning the binding is all we can do in JS.
+    privateKey = ("0x" + "0".repeat(64)) as Hex;
+  }
 
-  auditLog(
-    settlement.success ? "info" : "error",
-    "payment",
-    "x402_client_payment_completed",
-    { tx_id: tx.id, txHash: settlement.txHash, resource: intent.recipient },
-  );
+  const payload = client.buildPaymentPayload(intent, details, signed.from, signed);
 
-  return {
-    success: settlement.success,
-    txHash: settlement.txHash,
-    error: settlement.error,
-  };
+  // 4. Submit payment and get the resource + settlement proof
+  try {
+    const { settlement } = await client.submitPayment(intent.recipient, payload);
+
+    updateTransactionStatus(tx.id, settlement.success ? "executed" : "failed", {
+      tx_hash: settlement.txHash,
+      error_message: settlement.error,
+    });
+
+    auditLog(
+      settlement.success ? "info" : "error",
+      "payment",
+      "x402_client_payment_completed",
+      { tx_id: tx.id, txHash: settlement.txHash, resource: intent.recipient }
+    );
+
+    return {
+      success: settlement.success,
+      txHash: settlement.txHash,
+      error: settlement.error,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    updateTransactionStatus(tx.id, "failed", { error_message: msg });
+    auditLog("error", "payment", "x402_submit_failed", { tx_id: tx.id, error: msg });
+    return { success: false, error: msg };
+  }
 }
 
 // ─── AP2 Client Execution Helper ────────────────────────────────────────────
@@ -480,6 +535,93 @@ async function executeAP2ClientPayment(
   });
 
   return { success: result.status === "success", error: result.error };
+}
+
+// ─── MPP Client Execution Helper ────────────────────────────────────────────
+
+async function executeMPPClientPayment(
+  intent: PaymentIntent,
+  walletKeyAlias: string,
+  tx: TransactionRecord,
+  dryRun: boolean
+): Promise<{
+  success: boolean;
+  error?: string;
+  mppResult?: { invoice_id: string; receipt_id?: string; status: string };
+}> {
+  const logger = getLogger();
+
+  if (dryRun) {
+    const { stubMPPSettlement } = await import("./dry-run/stubs");
+    const result = await stubMPPSettlement(intent);
+    updateTransactionStatus(tx.id, result.status === "settled" ? "executed" : "failed", {
+      tx_hash: result.receipt_id,
+      error_message: result.error,
+    });
+    auditLog("info", "payment", "dryrun_mpp_client_executed", {
+      tx_id: tx.id,
+      invoice_id: result.invoice_id,
+      success: result.status === "settled",
+    });
+    return {
+      success: result.status === "settled",
+      error: result.error,
+      mppResult: {
+        invoice_id: result.invoice_id,
+        receipt_id: result.receipt_id,
+        status: result.status,
+      },
+    };
+  }
+
+  const client = new MPPClient();
+
+  // 1. Discover capabilities (price, accepted methods) at the MPP endpoint.
+  const quote = await client.requestQuote(intent);
+
+  // 2. Ask the merchant to issue an invoice binding intent → quote.
+  const invoice = await client.createInvoice(intent, quote);
+
+  // 3. Settle the invoice using the appropriate underlying rail.
+  //    For `rail: "x402"` MPP delegates to x402 (EIP-3009 signed auth).
+  //    For fiat rails it forwards a tokenized instrument.
+  const settlement = await client.settleInvoice(invoice, {
+    walletKeyAlias,
+    methodHint: (intent.metadata?.payment_method_type as string) ?? undefined,
+  });
+
+  // 4. Fetch the signed receipt.
+  const receipt = await client.fetchReceipt(invoice.invoice_id);
+
+  const success = settlement.status === "settled" && receipt.verified;
+
+  updateTransactionStatus(tx.id, success ? "executed" : "failed", {
+    tx_hash: receipt.receipt_id,
+    error_message: settlement.error,
+  });
+
+  auditLog(success ? "info" : "error", "payment", "mpp_client_payment_completed", {
+    tx_id: tx.id,
+    invoice_id: invoice.invoice_id,
+    receipt_id: receipt.receipt_id,
+    status: settlement.status,
+  });
+
+  logger.info("MPP client: payment completed", {
+    invoice_id: invoice.invoice_id,
+    receipt_id: receipt.receipt_id,
+    status: settlement.status,
+  });
+
+  return {
+    success,
+    error: settlement.error,
+    mppResult: {
+      invoice_id: invoice.invoice_id,
+      receipt_id: receipt.receipt_id,
+      status: settlement.status,
+    },
+  };
 }
 
 // ─── USD Estimation (simplified) ────────────────────────────────────────────
