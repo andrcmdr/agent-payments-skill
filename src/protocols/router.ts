@@ -10,6 +10,7 @@ import { auditLog } from "../db/audit";
 // `protocol` — a metadata tag indicating the payment's conceptual protocol:
 //   • "x402" — onchain / stablecoin / crypto payment flavour
 //   • "ap2"  — agent-mediated / mandate-based payment flavour
+//   • "mpp"  — agent-mediated / accept payments from external agents using the MPP lifecycle
 //
 // `gateway` — the actual execution backend used to move money:
 //   • "viem"       — direct on-chain ETH/ERC-20 transfer via Viem
@@ -21,12 +22,13 @@ import { auditLog } from "../db/audit";
 //   • "applepay"   — Apple Pay token processing
 //   • "x402"       — outbound x402 client (pay for an external x402-protected resource)
 //   • "ap2"        — outbound AP2 client (submit a mandate to an external AP2 service)
+//   • "mpp"        — outbound MPP client (paying for external services that expose an MPP endpoint)
 //
 // The `protocol` tag does NOT determine the execution path — `gateway` does.
 // When `gateway` is omitted, the router auto-detects from currency and recipient.
 
 export const PaymentIntentSchema = z.object({
-  protocol: z.enum(["x402", "ap2"]),
+  protocol: z.enum(["x402", "ap2", "mpp"]),
   action: z.literal("pay"),
   amount: z.string().regex(/^\d+(\.\d+)?$/, "Amount must be a decimal string"),
   currency: z.string(),
@@ -43,6 +45,7 @@ export const PaymentIntentSchema = z.object({
       "applepay",
       "x402",
       "ap2",
+      "mpp",
     ])
     .optional()
     .nullable(),
@@ -106,10 +109,11 @@ export function parsePaymentIntentFromAIOutput(
  *   "web2" → executeWeb2Payment (Stripe / PayPal / Visa / MC / GPay / APay)
  *   "x402" → X402Client (outbound x402 client — discover → sign → pay → access)
  *   "ap2"  → AP2Client  (outbound AP2 client — mandate → sign → cred → submit)
+ *   "mpp"  → MPPClient  (outbound MPP client - discover → QUOTE → INVOICE → SETTLE (via rail) → RECEIPT)
  */
 export type ProtocolRoute = {
-  protocol: "x402" | "ap2";
-  paymentType: "web3" | "web2" | "x402" | "ap2";
+  protocol: "x402" | "ap2" | "mpp";
+  paymentType: "web3" | "web2" | "x402" | "ap2" | "mpp";
   gateway: string;
 };
 
@@ -127,6 +131,7 @@ export type ProtocolRoute = {
  *   - "stripe", "paypal", "visa", "mastercard", "googlepay", "applepay" → web2
  *   - "x402"         → remote x402 resource payment (client)
  *   - "ap2"          → remote AP2 mandate payment (client)
+ *   - "mpp"          → remote MPP resource payment (client)
  */
 export function routePaymentIntent(intent: PaymentIntent): ProtocolRoute {
   const config = getConfig();
@@ -149,6 +154,9 @@ export function routePaymentIntent(intent: PaymentIntent): ProtocolRoute {
       case "ap2":
         paymentType = "ap2";
         break;
+      case "mpp":
+        paymentType = "mpp";
+        break;
       default:
         // stripe, paypal, visa, mastercard, googlepay, applepay
         paymentType = "web2";
@@ -161,15 +169,15 @@ export function routePaymentIntent(intent: PaymentIntent): ProtocolRoute {
       intent.recipient.startsWith("https://");
 
     if (isUrl && intent.protocol === "x402") {
-      // URL recipient + x402 protocol → outbound x402 client
       paymentType = "x402";
       gateway = "x402";
     } else if (isUrl && intent.protocol === "ap2") {
-      // URL recipient + ap2 protocol → outbound AP2 client
       paymentType = "ap2";
       gateway = "ap2";
+    } else if (isUrl && intent.protocol === "mpp") {
+      paymentType = "mpp";
+      gateway = "mpp";
     } else {
-      // Currency / protocol heuristic
       const cryptoCurrencies = ["USDC", "ETH", "WETH", "DAI", "USDT"];
       if (
         intent.protocol === "x402" ||
@@ -190,6 +198,9 @@ export function routePaymentIntent(intent: PaymentIntent): ProtocolRoute {
   }
   if (intent.protocol === "ap2" && !config.protocols.ap2.enabled) {
     throw new Error("AP2 protocol is disabled in configuration");
+  }
+  if (intent.protocol === "mpp" && !(config.protocols as any).mpp?.enabled) {
+    throw new Error("MPP protocol is disabled in configuration");
   }
 
   const route: ProtocolRoute = { protocol: intent.protocol, paymentType, gateway };
