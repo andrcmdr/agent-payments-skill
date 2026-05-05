@@ -233,3 +233,22 @@ export async function stubAP2Payment(intent: PaymentIntent): Promise<AP2PaymentR
     error: success ? undefined : "[DRY-RUN] AP2 mandate execution failed",
   };
 }
+
+// ─── MPP stub ────────────────────────────────────────────────────────────
+export async function stubMPPSettlement(intent: {
+  amount: string;
+  currency: string;
+  recipient: string;
+}): Promise<{
+  invoice_id: string;
+  receipt_id: string;
+  status: "settled" | "failed";
+  error?: string;
+}> {
+  const id = Math.random().toString(36).slice(2, 10);
+  return {
+    invoice_id: `inv_dryrun_${id}`,
+    receipt_id: `rcpt_dryrun_${id}`,
+    status: "settled",
+  };
+}
