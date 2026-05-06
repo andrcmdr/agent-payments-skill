@@ -18,6 +18,7 @@ import {
   X402ResourcePricing,
 } from "./protocols/x402/server";
 import { ap2Router } from "./protocols/ap2/server";
+import { mppRouter } from "./protocols/mpp/server";
 
 const configPath = process.env.CONFIG_PATH ?? "config/default.yaml";
 bootstrap(configPath);
@@ -72,7 +73,7 @@ app.get("/api/v1/health", (_req, res) => {
 // PROTOCOL SERVER ENDPOINTS — Accept payments from external agents
 // ═════════════════════════════════════════════════════════════════════════════
 
-// ── AP2 Server (mandate lifecycle) ──────────────────────────────────────────
+// ── AP2 Server (mandate lifecycle) ───────────────────────────────────────────
 // POST /api/v1/ap2/mandates           — Accept a mandate
 // GET  /api/v1/ap2/mandates           — List mandates
 // GET  /api/v1/ap2/mandates/:id       — Get mandate status
@@ -82,7 +83,20 @@ app.get("/api/v1/health", (_req, res) => {
 
 app.use("/api/v1/ap2", ap2Router);
 
-// ── x402 Server (paywall + management) ──────────────────────────────────────
+// ── MPP Server ───────────────────────────────────────────────────────────────
+// MPP — Machine Payments Protocol — Server.
+//
+// Accept payments from external agents using the MPP lifecycle:
+//   POST /api/v1//mpp/quote        issue a quote
+//   POST /api/v1//mpp/invoice      issue a signed, content-addressed invoice
+//   POST /api/v1//mpp/settle       settle an invoice via the chosen rail
+//   GET  /api/v1//mpp/receipt/:id  fetch (or re-fetch) the signed receipt
+//   GET  /api/v1//mpp/invoices/:id fetch invoice by id
+//
+
+app.use("/api/v1/mpp", mppRouter);
+
+// ── x402 Server (paywall + management) ───────────────────────────────────────
 
 // Registry of x402-priced resources
 const x402PricingRegistry = new Map<string, X402ResourcePricing>();
@@ -231,6 +245,12 @@ if (require.main === module) {
     logger.info("        POST /api/v1/ap2/sign-mandate");
     logger.info("        POST /api/v1/ap2/payment-credentials");
     logger.info("        POST /api/v1/ap2/process-payment");
+    logger.info("  MPP:  POST /api/v1/mpp/");
+    logger.info("        POST /api/v1//mpp/quote");
+    logger.info("        POST /api/v1//mpp/invoice");
+    logger.info("        POST /api/v1//mpp/settle");
+    logger.info("         GET /api/v1//mpp/receipt/:id");
+    logger.info("         GET /api/v1//mpp/invoices/:id");
   });
 }
 
