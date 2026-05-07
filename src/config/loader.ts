@@ -66,7 +66,7 @@ const ConfigSchema = z.object({
         default_price: z.string().default("1000000"),
         default_description: z.string().default("Access to premium agentic data feed"),
       }).default({ enabled: false, pay_to_address: "0x0000000000000000000000000000000000000001", default_price: "1000000", default_description: "Access to premium agentic data feed" }),
-    }),
+    }).passthrough(),
     ap2: z.object({
       enabled: z.boolean(),
       mandate_issuer: z.string(),
@@ -77,7 +77,19 @@ const ConfigSchema = z.object({
         enabled: z.boolean().default(false),
         agent_id: z.string().default("openclaw-payments-agent"),
       }).default({ enabled: false, agent_id: "openclaw-payments-agent" }),
-    }),
+    }).passthrough(),
+    mpp: z.object({
+      enabled: z.boolean().default(true),
+      merchant_id: z.string().default("agentic-payments-bot"),
+      accepted_rails: z
+        .array(z.enum(["x402", "stripe", "paypal", "card", "crypto"]))
+        .default(["x402", "stripe"]),
+      default_network: z.string().default("base"),
+      default_asset: z.string().default("USDC"),
+      pay_to: z.string().optional(),
+      signing_secret: z.string().optional(),
+      timeout_ms: z.number().int().positive().default(15000),
+    }).default({}),
   }),
   web3: z.record(
     z.string(),
