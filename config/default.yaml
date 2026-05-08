@@ -55,6 +55,18 @@ protocols:
       enabled: true
       # Agent ID used when this service acts as an AP2 client
       agent_id: "openclaw-payments-agent"
+  mpp:
+    enabled: true
+    merchant_id: "agentic-payments-bot"
+    accepted_rails:
+      - "x402"
+      - "stripe"
+      - "paypal"
+    default_network: "base"
+    default_asset: "USDC"
+    # pay_to: "0xYOUR_WALLET_ADDRESS"
+    # signing_secret: "replace-in-production" # or set MPP_SIGNING_SECRET env var
+    timeout_ms: 15000
 
 # Web3 Configuration
 web3:
