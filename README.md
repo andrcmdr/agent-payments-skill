@@ -28,6 +28,11 @@
   - [AP2 Protocol (Agent Payments Protocol)](#ap2-protocol-agent-payments-protocol)
     - [AP2 Client (Submitting Mandates)](#ap2-client-submitting-mandates)
     - [AP2 Server (Processing Mandates)](#ap2-server-processing-mandates)
+  - [MPP Protocol (Machine Payments Protocol)](#mpp-protocol-machine-payments-protocol)
+    - [MPP Lifecycle](#mpp-lifecycle)
+    - [MPP Client (Paying an External MPP Endpoint)](#mpp-client-paying-an-external-mpp-endpoint)
+    - [MPP Server (Accepting MPP Payments)](#mpp-server-accepting-mpp-payments)
+    - [MPP Rails](#mpp-rails)
   - [Protocol Router](#protocol-router)
 - [Payment Backends](#payment-backends)
   - [Web3 — Ethereum (Viem)](#web3--ethereum-viem)
@@ -39,6 +44,7 @@
   - [Web2 — Apple Pay](#web2--apple-pay)
   - [x402 — Remote Resource Payment](#x402--remote-resource-payment)
   - [AP2 — Remote Mandate Payment](#ap2--remote-mandate-payment)
+  - [MPP — Remote Invoice Payment](#mpp--remote-invoice-payment)
 - [Security](#security)
   - [KMS Provider System](#kms-provider-system)
     - [Provider Overview](#provider-overview)
@@ -93,6 +99,12 @@
     - [POST /api/v1/ap2/sign-mandate](#post-apiv1ap2sign-mandate)
     - [POST /api/v1/ap2/payment-credentials](#post-apiv1ap2payment-credentials)
     - [POST /api/v1/ap2/process-payment](#post-apiv1ap2process-payment)
+  - [MPP Server Endpoints](#mpp-server-endpoints)
+    - [POST /api/v1/mpp/quote](#post-apiv1mppquote)
+    - [POST /api/v1/mpp/invoice](#post-apiv1mppinvoice)
+    - [POST /api/v1/mpp/settle](#post-apiv1mppsettle)
+    - [GET /api/v1/mpp/receipt/:invoiceId](#get-apiv1mppreceiptinvoiceid)
+    - [GET /api/v1/mpp/invoices/:invoiceId](#get-apiv1mppinvoicesinvoiceid)
   - [Error Responses](#error-responses)
 - [OpenClaw Chat Integration](#openclaw-chat-integration)
   - [Payment Intent JSON Schema](#payment-intent-json-schema)
@@ -112,11 +124,13 @@
   - [Example 11 — Apple Pay Payment (Web2)](#example-11--apple-pay-payment-web2)
   - [Example 12 — x402 Remote Resource Payment (Paying Another Service)](#example-12--x402-remote-resource-payment-paying-another-service)
   - [Example 13 — AP2 Remote Mandate Payment (Paying Another Service)](#example-13--ap2-remote-mandate-payment-paying-another-service)
-  - [Example 14 — AI Chat-Driven Payment](#example-14--ai-chat-driven-payment)
-  - [Example 15 — Policy Violation & Human Confirmation](#example-15--policy-violation--human-confirmation)
-  - [Example 16 — Key Management](#example-16--key-management)
-  - [Example 17 — x402 Paywall (External Agent Paying You)](#example-17--x402-paywall-external-agent-paying-you)
-  - [Example 18 — AP2 Mandate (External Agent Paying You)](#example-18--ap2-mandate-external-agent-paying-you)
+  - [Example 14 — MPP Remote Invoice Payment (Paying Another Service)](#example-14--mpp-remote-invoice-payment-paying-another-service)
+  - [Example 15 — AI Chat-Driven Payment](#example-15--ai-chat-driven-payment)
+  - [Example 16 — Policy Violation & Human Confirmation](#example-16--policy-violation--human-confirmation)
+  - [Example 17 — Key Management](#example-17--key-management)
+  - [Example 18 — x402 Paywall (External Agent Paying You)](#example-18--x402-paywall-external-agent-paying-you)
+  - [Example 19 — AP2 Mandate (External Agent Paying You)](#example-19--ap2-mandate-external-agent-paying-you)
+  - [Example 20 — MPP Server Lifecycle (External Agent Paying You)](#example-20--mpp-server-lifecycle-external-agent-paying-you)
 - [Development](#development)
   - [Build](#build)
   - [Run Tests](#run-tests)
@@ -161,8 +175,10 @@ across both blockchain (web3) and traditional (web2) payment rails.
 │  ┌─────────────────── SERVER SIDE (Accept Payments) ───────────────────────────┐  │
 │  │                                                                             │  │
 │  │  External Agents ──► x402 Paywall Middleware (HTTP 402 flow)                │  │
-│  │                      AP2 Mandate Endpoints (mandate lifecycle)  ──► Payment │  │
-│  │                                                                   Execution │  │
+│  │                      AP2 Mandate Endpoints (mandate lifecycle)              │  │
+│  │                      MPP Endpoints (quote → invoice → settle → receipt) ──► │  │
+│  │                                                                   Payment   │  │
+│  │                                                                  Execution  │  │
 │  └─────────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                   │
 │  ┌───────────┐   ┌───────────────┐   ┌──────────┐                                 │
@@ -175,25 +191,25 @@ across both blockchain (web3) and traditional (web2) payment rails.
 │  │  (AI output parser → PaymentIntent → routing)   │                              │
 │  └────┬──────────┬─────────┬──────────┬────────────┘                              │
 │       │          │         │          │                                           │
-│  ┌────▼───┐ ┌───▼────┐ ┌───▼────┐ ┌───▼────┐                                      │
-│  │ web3   │ │ web2   │ │ x402   │ │ ap2    │                                      │
-│  │(Viem)  │ │(Stripe │ │(remote │ │(remote │                                      │
-│  │        │ │PayPal  │ │resource│ │mandate │                                      │
-│  │        │ │Visa MC │ │client) │ │client) │                                      │
-│  │        │ │GPay    │ │        │ │        │                                      │
-│  │        │ │APay)   │ │        │ │        │                                      │
-│  └────┬───┘ └───┬────┘ └───┬────┘ └───┬────┘                                      │
-│       │         │          │          │                                           │
-│  ┌────▼─────────▼──────────▼──────────▼────────┐                                  │
-│  │            Policy Engine                    │                                  │
-│  │  (compliance checks before execution)       │                                  │
-│  │  ┌───────────────────────────────────────┐  │                                  │
-│  │  │ • Single tx limit    • Blacklist      │  │                                  │
-│  │  │ • Daily/Weekly/Mo    • Whitelist      │  │                                  │
-│  │  │ • Time-of-day        • Currency       │  │                                  │
-│  │  └───────────────────────────────────────┘  │                                  │
-│  │       │ (violation?) ──► Human Confirm      │                                  │
-│  └───────┼─────────────────────────────────────┘                                  │
+│  ┌────▼───┐ ┌────▼───┐ ┌───▼────┐ ┌───▼────┐ ┌───▼────┐                           │
+│  │ web3   │ │ web2   │ │ x402   │ │ ap2    │ │ mpp    │                           │
+│  │(Viem)  │ │(Stripe │ │(remote │ │(remote │ │(remote │                           │
+│  │        │ │PayPal  │ │resource│ │mandate │ │invoice │                           │
+│  │        │ │Visa MC │ │client) │ │client) │ │client) │                           │
+│  │        │ │GPay    │ │        │ │        │ │        │                           │
+│  │        │ │APay)   │ │        │ │        │ │        │                           │
+│  └────┬───┘ └───┬────┘ └───┬────┘ └───┬────┘ └───┬────┘                           │
+│       │         │          │          │          │                                │
+│  ┌────▼─────────▼──────────▼──────────▼──────────▼────┐                           │
+│  │            Policy Engine                           │                           │
+│  │  (compliance checks before execution)              │                           │
+│  │  ┌───────────────────────────────────────┐         │                           │
+│  │  │ • Single tx limit    • Blacklist      │         │                           │
+│  │  │ • Daily/Weekly/Mo    • Whitelist      │         │                           │
+│  │  │ • Time-of-day        • Currency       │         │                           │
+│  │  └───────────────────────────────────────┘         │                           │
+│  │       │ (violation?) ──► Human Confirm             │                           │
+│  └───────┼────────────────────────────────────────────┘                           │
 │          │                                                                        │
 │  ┌───────▼─────────────────────────────────────┐  ┌───────────────┐               │
 │  │          Payment Execution                  │  │  KMS Provider │               │
@@ -623,6 +639,131 @@ When the skill acts as a **payment provider** that accepts AP2 mandates from ext
 **Reference:** [AP2 Specification](https://ap2-protocol.org/specification/) ·
 [Google Announcement](https://cloud.google.com/blog/products/ai-machine-learning/announcing-agents-to-payments-ap2-protocol)
 
+### MPP Protocol (Machine Payments Protocol)
+
+**MPP (Machine Payments Protocol)** is a HTTP-native, rail-agnostic payment
+protocol designed for autonomous agents. It composes on top of existing rails
+(x402 on-chain authorizations, Stripe/PayPal fiat, card tokens, raw
+crypto tx hashes) via a uniform **quote → invoice → settle → receipt**
+lifecycle with content-addressed invoices and signed receipts.
+
+The skill implements MPP in **both directions** — as a client (paying any MPP
+endpoint) and as a server (exposing paywall resources via MPP to external
+agents).
+
+#### MPP Lifecycle
+
+| Step | Endpoint | Who calls | Purpose |
+|---|---|---|---|
+| 1 — Quote | `POST /mpp/quote` | Client (agent) | Ask the merchant what it costs and which rails are accepted |
+| 2 — Invoice | `POST /mpp/invoice` | Client (agent) | Receive a content-addressed, signed invoice binding the quote |
+| 3 — Settle | `POST /mpp/settle` | Client (agent) | Pay via the chosen rail (x402 EIP-3009 auth, Stripe token, etc.) |
+| 4 — Receipt | `GET /mpp/receipt/:id` | Client (agent) | Fetch (or verify) the signed settlement receipt |
+
+Invoice IDs are `sha256(canonicalize(body))` which makes them tamper-evident
+and safe to pin or cache.
+
+```
+Agent                                 Merchant (this service)
+  │                                              │
+  │── POST /mpp/quote ──────────────────────────►│
+  │◄── 200 MPPQuote (price, accepted_rails) ─────│
+  │                                              │
+  │── POST /mpp/invoice {quote_id} ─────────────►│
+  │◄── 201 MPPInvoice (rail, pay_to, signature)  │
+  │                                              │
+  │   [build rail-specific payload:              │
+  │    • x402  → EIP-3009 TransferWithAuth       │
+  │    • stripe → payment-method token           │
+  │    • crypto → tx hash                 ]      │
+  │                                              │
+  │── POST /mpp/settle {invoice_id, rail, ...} ─►│
+  │                                              │── [settle on rail]
+  │◄── 200 MPPReceipt (status, rail_reference) ──│
+  │                                              │
+  │── GET /mpp/receipt/:invoice_id ─────────────►│
+  │◄── 200 MPPReceipt (signed) ──────────────────│
+```
+
+#### MPP Client (Paying an External MPP Endpoint)
+
+When the skill needs to **pay** an external MPP-compliant service:
+
+1. **Quote** — `POST /mpp/quote` with the intent's amount, currency, and
+   description. The merchant returns `MPPQuote` listing accepted rails,
+   pay-to address (for on-chain rails), and expiry.
+2. **Invoice** — `POST /mpp/invoice` with the `quote_id`. The merchant issues
+   an `MPPInvoice` with `rail`, `amount`, `network`, `asset`, `pay_to`, and a
+   content-addressed `invoice_id`.
+3. **Rail payload construction** — the client builds the rail-specific payload.
+   For `rail: "x402"`, the client decrypts the wallet private key through the
+   configured KMS backend (AWS KMS / OS Keyring / D-Bus / GPG / Local AES) and
+   signs an EIP-3009 `TransferWithAuthorization` via Viem. For fiat rails, a
+   tokenized payment method is attached.
+4. **Settle** — `POST /mpp/settle` with the rail payload.
+5. **Receipt** — the server returns a signed `MPPReceipt`; the client stores
+   the `receipt_id` and `rail_reference` (tx hash, payment intent id, etc.)
+   as the transaction's settlement proof.
+
+**Trigger:** set `gateway: "mpp"` in the `PaymentIntent`, or use an MPP URL as
+the recipient with `protocol: "mpp"`. The protocol router auto-detects both.
+
+**Example intent:**
+```json
+{
+  "protocol": "mpp",
+  "action": "pay",
+  "amount": "1.00",
+  "currency": "USDC",
+  "recipient": "https://merchant.example.com/mpp",
+  "network": "base",
+  "gateway": "mpp",
+  "description": "Pay 1 USDC via MPP",
+  "metadata": {
+    "payment_method_type": "x402"
+  }
+}
+```
+
+In **dry-run mode**, the MPP client flow is fully stubbed — no real HTTP
+requests or on-chain transactions are made.
+
+#### MPP Server (Accepting MPP Payments)
+
+Four endpoints implement the full MPP lifecycle. Every issued invoice is
+content-addressed (`invoice_id = sha256(canonical_body)`) and every receipt
+is signed with the server's MPP signing secret (`protocols.mpp.signing_secret`
+in config, or `MPP_SIGNING_SECRET` env var).
+
+**Server endpoints:**
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/mpp/quote` | POST | Issue a quote (price + accepted rails) |
+| `/api/v1/mpp/invoice` | POST | Issue a content-addressed signed invoice from a quote |
+| `/api/v1/mpp/settle` | POST | Settle an invoice via the chosen rail |
+| `/api/v1/mpp/receipt/:invoiceId` | GET | Fetch the signed receipt |
+| `/api/v1/mpp/invoices/:invoiceId` | GET | Fetch the invoice + status |
+| `/api/v1/mpp/invoices` | GET | List issued invoices (admin/debug) |
+
+#### MPP Rails
+
+The `rail` field on an invoice tells the server **how** to settle it. Each
+rail has a well-defined `payload` shape:
+
+| Rail | `payload` shape | Underlying backend |
+|---|---|---|
+| `x402` | `{ "x402Payload": { ...X402PaymentPayload } }` | Submitted to the x402 facilitator (EIP-3009 on-chain settlement) |
+| `stripe` | `{ "token": "tok_...", "token_provider": "stripe" }` | Routed through `executeWeb2Payment("stripe", ...)` |
+| `paypal` | `{ "token": "tok_...", "token_provider": "paypal" }` | Routed through `executeWeb2Payment("paypal", ...)` |
+| `card` | `{ "token": "tok_...", "token_provider": "stripe" }` | Same as `stripe` (generic card via Stripe) |
+| `crypto` | `{ "txHash": "0x...", "network": "base" }` | Client-broadcast on-chain tx; server records the reference |
+
+> **Security note:** the settle endpoint always re-checks invoice expiry,
+> rail match, and single-use semantics before touching any rail. The
+> facilitator URL, Stripe/PayPal keys, and MPP signing secret are loaded
+> through the pluggable KMS backend — nothing is logged in plaintext.
+
 ### Protocol Router
 
 The protocol router (`src/protocols/router.ts`) is the entry point for all payment requests. It:
@@ -636,16 +777,17 @@ The protocol router (`src/protocols/router.ts`) is the entry point for all payme
 2. **Validates** with Zod schema enforcement
 3. **Routes** to the correct protocol + payment backend based on:
    - Explicit `gateway` field (if provided): `viem`, `stripe`, `paypal`, `visa`, `mastercard`,
-     `googlepay`, `applepay`, **`x402`**, or **`ap2`**
+     `googlepay`, `applepay`, **`x402`**, **`ap2`**, or **`mpp`**
    - URL detection (recipient starting with `http://` or `https://`):
      - `protocol: "x402"` + URL recipient → x402 remote resource payment
      - `protocol: "ap2"` + URL recipient → AP2 remote mandate submission
+     - `protocol: "mpp"` + URL recipient → MPP remote invoice payment
    - Currency-based heuristic (crypto currencies → web3/viem, fiat → web2/stripe)
    - Protocol hint (x402 → web3, AP2 → either)
 
 **Routing matrix:**
 
-> **Key distinction:** The `protocol` field (`x402`/`ap2`) is a **metadata tag**
+> **Key distinction:** The `protocol` field (`x402`/`ap2`/`mpp`) is a **metadata tag**
 > classifying the payment's flavour — it does NOT determine execution.
 > The `gateway` field is the **routing key** that selects the execution backend.
 
@@ -660,16 +802,18 @@ The protocol router (`src/protocols/router.ts`) is the entry point for all payme
 | `applepay` | `web2` | Apple Pay token processing |
 | `x402` | `x402` | **Outbound x402 client** — discover → sign → pay → access an external x402-protected resource |
 | `ap2` | `ap2` | **Outbound AP2 client** — create mandate → sign → get credentials → submit to external AP2 service |
+| `mpp` | `mpp` | **Outbound MPP client** — quote → invoice → settle → receipt against an external MPP endpoint |
 
 **Auto-detection** when `gateway` is omitted:
 1. URL-shaped `recipient` + `protocol: "x402"` → gateway `x402`
 2. URL-shaped `recipient` + `protocol: "ap2"` → gateway `ap2`
-3. Crypto currency (`USDC`, `USDT`, `ETH`, `WETH`, `DAI`) or `protocol: "x402"` → gateway `viem`
-4. Otherwise → gateway `stripe`
+3. URL-shaped `recipient` + `protocol: "mpp"` → gateway `mpp`
+4. Crypto currency (`USDC`, `USDT`, `ETH`, `WETH`, `DAI`) or `protocol: "x402"` → gateway `viem`
+5. Otherwise → gateway `stripe`
 
-**Server-side endpoints** (`/api/v1/x402/*`, `/api/v1/ap2/*`) are **independent
+**Server-side endpoints** (`/api/v1/x402/*`, `/api/v1/ap2/*`, `/api/v1/mpp/*`) are **independent
 infrastructure** — they allow *external* agents to pay *this service* via x402
-paywalls or AP2 mandates. They are not related to the `protocol`/`gateway` fields
+paywalls or AP2 mandates or MPP invoices. They are not related to the `protocol`/`gateway` fields
 in the payment intent JSON.
 
 ---
@@ -838,6 +982,28 @@ the full AP2 client flow:
 
 In **dry-run mode**, the AP2 client flow is fully stubbed — no real HTTP requests are made. The
 stub returns simulated mandate and payment responses.
+
+### MPP — Remote Invoice Payment
+
+The MPP client (`src/protocols/mpp/client.ts`) is integrated as a payment
+backend. When the protocol router determines the payment should go through
+MPP (e.g., the recipient is an MPP endpoint URL), the orchestrator invokes
+the full four-step flow:
+
+1. **Quote** — `POST /mpp/quote`.
+2. **Invoice** — `POST /mpp/invoice`.
+3. **Settle** — build the rail-specific payload and `POST /mpp/settle`.
+   - For `rail: "x402"`, the wallet private key is decrypted through the
+     configured KMS backend (AWS KMS / OS Keyring / D-Bus / GPG / Local AES)
+     and a fresh EIP-3009 `TransferWithAuthorization` is signed via Viem.
+   - For `rail: "stripe" | "paypal" | "card"`, a tokenized payment method is
+     attached.
+4. **Receipt** — fetch and store the signed `MPPReceipt`.
+
+**Trigger:** set `gateway: "mpp"` or use an MPP URL as `recipient` with
+`protocol: "mpp"`.
+
+In dry-run mode the whole MPP flow is stubbed — no real HTTP requests are made.
 
 ---
 
@@ -1328,6 +1494,14 @@ Every significant action writes to the `audit_log` table:
 | `ap2_server` | `mandate_signed` | AP2 server signed a mandate |
 | `ap2_server` | `credentials_issued` | AP2 server issued payment credentials |
 | `ap2_server` | `payment_processed` | AP2 server executed a mandate payment |
+| `mpp_server` | `quote_issued` | MPP server issued a quote |
+| `mpp_server` | `invoice_issued` | MPP server issued a signed invoice |
+| `mpp_server` | `invoice_settled` | MPP server settled an invoice and issued a receipt |
+| `protocol` | `mpp_quote_received` | MPP client received a quote |
+| `protocol` | `mpp_invoice_created` | MPP client received an invoice |
+| `protocol` | `mpp_settle_submitted` | MPP client submitted settle request |
+| `payment` | `mpp_client_payment_completed` | After MPP client lifecycle completes |
+| `payment` | `dryrun_mpp_client_executed` | Dry-run MPP client executed |
 | `payment` | `eth_transfer_sent` | After Viem ETH tx broadcast |
 | `payment` | `erc20_transfer_sent` | After Viem ERC-20 tx broadcast |
 | `payment` | `web3_payment_confirmed` | After on-chain confirmation |
@@ -3062,6 +3236,42 @@ Stripe, PayPal, Viem, or any other configured backend.
 }
 ```
 
+### MPP Server Endpoints
+
+These endpoints allow external agents to pay you via the MPP protocol.
+
+---
+
+#### `POST /api/v1/mpp/quote`
+
+Issue a quote. Body: `{ "mpp_version": "1.0", "amount": "<decimal>", "currency": "<code>", "description"?: "..." }`.
+Response `200`: `MPPQuote` (with `quote_id`, `accepted_rails`, `expires_at`).
+
+#### `POST /api/v1/mpp/invoice`
+
+Issue a content-addressed signed invoice for an existing quote.
+Body: `{ "mpp_version": "1.0", "quote_id": "...", "preferred_rail"?: "x402" | "stripe" | "paypal" | "card" | "crypto" }`.
+Response `201`: `MPPInvoice` (with `invoice_id`, `rail`, `pay_to`, `signature`).
+Response `410`: quote has expired.
+
+#### `POST /api/v1/mpp/settle`
+
+Settle an invoice using a rail-specific payload (see *MPP Rails* above).
+Response `200`: `MPPReceipt` with `status: "settled"` + `rail_reference`.
+Response `202`: `status: "pending"` for async rails.
+Response `409`: invoice already settled.
+Response `410`: invoice has expired.
+
+#### `GET /api/v1/mpp/receipt/:invoiceId`
+
+Fetch the signed receipt for a previously settled invoice.
+Response `200`: `MPPReceipt`.
+Response `404`: receipt not found.
+
+#### `GET /api/v1/mpp/invoices/:invoiceId`
+
+Fetch invoice + status. Response `200`: `{ "invoice": MPPInvoice, "status": "issued" | "settled" | "failed" }`.
+
 ### Error Responses
 
 All endpoints return errors in a consistent format:
@@ -3783,7 +3993,55 @@ curl -X POST http://localhost:3402/api/v1/payment \
   }'
 ```
 
-### Example 14 — AI Chat-Driven Payment
+### Example 14 — MPP Remote Invoice Payment (Paying Another Service)
+
+This demonstrates the **client side** — your agent discovers, invoices, and
+settles an MPP payment at an external merchant.
+
+**Via CLI:**
+```bash
+agentic-payments-bot pay \
+  --protocol mpp \
+  --amount 1.00 \
+  --currency USDC \
+  --to https://merchant.example.com/mpp \
+  --network base \
+  --gateway mpp \
+  --description "Pay via MPP on Base"
+```
+
+**Via Web API (curl):**
+```bash
+curl -X POST http://localhost:3402/api/v1/payment \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "mpp",
+    "action": "pay",
+    "amount": "1.00",
+    "currency": "USDC",
+    "recipient": "https://merchant.example.com/mpp",
+    "network": "base",
+    "gateway": "mpp",
+    "description": "Pay via MPP on Base",
+    "metadata": { "payment_method_type": "x402" }
+  }'
+```
+
+**Response (dry-run):**
+```json
+{
+  "success": true,
+  "tx": { "id": "...", "protocol": "mpp", "gateway": "mpp", "status": "executed" },
+  "mppResult": {
+    "invoice_id": "inv_dryrun_abc123",
+    "receipt_id": "rcpt_dryrun_abc123",
+    "status": "settled"
+  },
+  "dryRun": true
+}
+```
+
+### Example 15 — AI Chat-Driven Payment
 
 User prompt in OpenClaw chat:
 
@@ -3827,7 +4085,7 @@ curl -X POST http://localhost:3402/api/v1/parse \
   -d '{"text": "{\"protocol\":\"x402\",\"action\":\"pay\",\"amount\":\"5.00\",\"currency\":\"USDC\",\"recipient\":\"0x742d35Cc6635C0532925a3b844Bc9e7595f2bD65\",\"network\":\"base\"}"}'
 ```
 
-### Example 15 — Policy Violation & Human Confirmation
+### Example 16 — Policy Violation & Human Confirmation
 
 **Via CLI (over-limit triggers policy engine):**
 ```bash
@@ -3885,7 +4143,7 @@ curl -X POST http://localhost:3402/api/v1/confirm/<tx-id> \
   -d '{"confirmed": true, "reason": "One-time approved by CFO"}'
 ```
 
-### Example 16 — Key Management
+### Example 17 — Key Management
 
 ```bash
 # Store a wallet private key
@@ -3915,7 +4173,7 @@ agentic-payments-bot keys delete trading_wallet
 agentic-payments-bot keys delete stripe_api_key
 ```
 
-### Example 17 — x402 Paywall (External Agent Paying You)
+### Example 18 — x402 Paywall (External Agent Paying You)
 
 This demonstrates the **server side** — an external agent pays for access to a
 resource protected by the x402 paywall middleware.
@@ -3985,7 +4243,7 @@ curl http://localhost:3402/api/v1/x402/pricing
 }
 ```
 
-### Example 18 — AP2 Mandate (External Agent Paying You)
+### Example 19 — AP2 Mandate (External Agent Paying You)
 
 This demonstrates the **server side** — an external agent submits an AP2 mandate
 and the server processes the payment internally.
@@ -4126,6 +4384,112 @@ curl http://localhost:3402/api/v1/ap2/mandates/mandate_1709712000_demo
 }
 ```
 
+### Example 20 — MPP Server Lifecycle (External Agent Paying You)
+
+**Step 1 — Agent requests a quote:**
+```bash
+curl -X POST http://localhost:3402/api/v1/mpp/quote \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mpp_version": "1.0",
+    "amount": "1.00",
+    "currency": "USDC",
+    "description": "Premium feed access"
+  }'
+```
+
+Response:
+```json
+{
+  "mpp_version": "1.0",
+  "quote_id": "quo_7f2c...",
+  "merchant_id": "agentic-payments-bot",
+  "amount": "1.00",
+  "currency": "USDC",
+  "accepted_rails": ["x402", "stripe"],
+  "network": "base",
+  "asset": "USDC",
+  "pay_to": "0x...",
+  "expires_at": "2026-04-24T12:05:00.000Z"
+}
+```
+
+**Step 2 — Agent requests the invoice:**
+```bash
+curl -X POST http://localhost:3402/api/v1/mpp/invoice \
+  -H "Content-Type: application/json" \
+  -d '{ "mpp_version": "1.0", "quote_id": "quo_7f2c..." }'
+```
+
+Response:
+```json
+{
+  "mpp_version": "1.0",
+  "invoice_id": "inv_8a2f9c4b...",
+  "quote_id": "quo_7f2c...",
+  "amount": "1.00",
+  "currency": "USDC",
+  "rail": "x402",
+  "network": "base",
+  "asset": "USDC",
+  "pay_to": "0x...",
+  "expires_at": "2026-04-24T12:10:00.000Z",
+  "signature": "ab12cd34..."
+}
+```
+
+**Step 3 — Agent settles with a signed x402 authorization:**
+```bash
+curl -X POST http://localhost:3402/api/v1/mpp/settle \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mpp_version": "1.0",
+    "invoice_id": "inv_8a2f9c4b...",
+    "rail": "x402",
+    "payload": {
+      "x402Payload": {
+        "x402Version": 1,
+        "scheme": "exact",
+        "network": "base",
+        "payload": {
+          "signature": "0x...",
+          "authorization": {
+            "from": "0x...",
+            "to": "0x...",
+            "value": "1000000",
+            "validAfter": "0",
+            "validBefore": "1745501160",
+            "nonce": "0x..."
+          }
+        }
+      }
+    },
+    "payer": { "agent_id": "external-agent-001" }
+  }'
+```
+
+Response:
+```json
+{
+  "mpp_version": "1.0",
+  "receipt_id": "rcpt_6e3d...",
+  "invoice_id": "inv_8a2f9c4b...",
+  "status": "settled",
+  "rail": "x402",
+  "amount": "1.00",
+  "currency": "USDC",
+  "rail_reference": "0xabc...def",
+  "settled_at": "2026-04-24T12:06:10.000Z",
+  "signature": "9f1e2d3c...",
+  "verified": true
+}
+```
+
+**Step 4 — Fetch (or re-verify) the receipt later:**
+```bash
+curl http://localhost:3402/api/v1/mpp/receipt/inv_8a2f9c4b...
+```
+
 ---
 
 ## Development
@@ -4202,6 +4566,11 @@ npm run dev          # ts-node src/index.ts
 | `Apple Pay requires a 'paymentToken' in metadata` | Missing client-side token | Ensure the Apple Pay JS API token is passed in `metadata.paymentToken` |
 | `Apple Pay merchant validation failed` | Invalid cert or domain | Verify domain is registered with Apple and `applepay_merchant_cert` is valid |
 | `x402 settlement failed: Facilitator rejected` | Invalid payment payload or facilitator unreachable | Check `facilitator_url` in config, verify the signed authorization fields (amount, payTo, time bounds) |
+| `MPP /quote failed: 404` | Recipient URL is not an MPP endpoint | Ensure the recipient points to `<origin>/mpp` (the client also accepts a deeper path and strips it back to `/mpp`) |
+| `MPP /invoice failed: 410 Quote has expired` | Client took too long between quote and invoice | Re-run the flow; quotes expire after 5 minutes by default |
+| `MPP /settle failed: 410 Invoice has expired` | Took too long to settle | Request a new invoice (default TTL is 10 minutes) |
+| `Invoice rail is X, got Y` | `rail` in `/settle` does not match the invoice | Use the rail the invoice was issued for (or request a new invoice with `preferred_rail`) |
+| `MPP x402 rail requires network/asset/pay_to in invoice` | Merchant configured the MPP x402 rail without specifying on-chain details | Set `protocols.mpp.default_network`, `default_asset`, and `pay_to` in your config |
 | `AP2 mandate has expired` | Mandate `valid_until` is in the past | Create a new mandate with a future expiry |
 | `Mandate already executed (single-use)` | Attempting to reuse a single-use mandate | Create a new mandate for each payment |
 | `Invalid X-PAYMENT header` | Malformed Base64 or JSON in x402 payment header | Ensure the `X-PAYMENT` header is valid Base64-encoded JSON matching `X402PaymentPayload` |
