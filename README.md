@@ -5,7 +5,7 @@
 # 🤖💵 Agentic Payment Service for Open Agent Skills Ecosystem.
 
 > A dual-protocol (x402 + AP2) agentic payment service for Open Agent Skills Ecosystem (including OpenClaw, Claude Code, Codex, Junie, OpenCode, GitHub Copilot, Gemini CLI, etc.),
-> with web3 & web2 gateway support, AWS KMS key management, policy engine compliance, audit trail, and human-in-the-loop confirmation.
+> with web3 & web2 gateway support, EIP-3009 signed stablecoin authorizations (Viem), AWS KMS key management, policy engine compliance, audit trail, and human-in-the-loop confirmation.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7+-blue.svg)](https://www.typescriptlang.org/)
 [![OpenClaw Skill](https://img.shields.io/badge/OpenClaw-Skill-ff6b35.svg)](https://openclaw.ai)
@@ -153,6 +153,7 @@ across both blockchain (web3) and traditional (web2) payment rails.
 | **Dual protocol support** | x402 (HTTP 402 + onchain settlement) and AP2 (Google's mandate-based agent payments) |
 | **Dual role: server + client** | Acts as a **payment gateway** (accepts payments from external agents via x402/AP2 server endpoints) and as a **payment client** (makes payments to external services via all backends) |
 | **Web3 transactions** | Ethereum, Base, Polygon via [Viem](https://viem.sh) — native ETH and ERC-20 (USDC, etc.) |
+| **EIP-3009 signing** | Full x402 client payment flow: EIP-712 `TransferWithAuthorization` signed via Viem with a private key decrypted through the configured KMS backend — the key never leaves the KMS trust boundary |
 | **Web2 gateways** | Stripe, PayPal, Visa Direct, Mastercard Send, Google Pay, Apple Pay |
 | **Protocol gateways** | x402 remote resource payment, AP2 remote mandate submission — paying any service that supports these protocols |
 | **Key management** | Pluggable KMS providers: AWS KMS, OS Keyring (KDE Wallet / GNOME Keyring / macOS Keychain / Windows Credential Manager), D-Bus Secret Service, GnuPG, Local AES-256-GCM |
@@ -216,9 +217,9 @@ across both blockchain (web3) and traditional (web2) payment rails.
 │  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌──────┐  │  │ ┌───────────┐ │               │
 │  │  │ Viem   │ │ Stripe │ │ PayPal │ │ Visa │  │  │ │ AWS KMS   │ │               │
 │  │  │(ETH/   │ │        │ │        │ │ MC   │  │  │ │ OS Keyring│ │               │
-│  │  │ ERC20) │ │        │ │        │ │ GPay │  │  │ │ D-Bus SS  │ │               │
-│  │  │        │ │        │ │        │ │ APay │  │◄─│ │ GnuPG     │ │               │
-│  │  │        │ │        │ │        │ │ x402 │  │  │ │ Local AES │ │               │
+│  │  │ ERC20/ │ │        │ │        │ │ GPay │  │  │ │ D-Bus SS  │ │               │
+│  │  │ EIP-   │ │        │ │        │ │ APay │  │◄─│ │ GnuPG     │ │               │
+│  │  │ 3009)  │ │        │ │        │ │ x402 │  │  │ │ Local AES │ │               │
 │  │  │        │ │        │ │        │ │ AP2  │  │  │ └───────────┘ │               │
 │  │  └────────┘ └────────┘ └────────┘ └──────┘  │  └───────────────┘               │
 │  └──────────────┬──────────────────────────────┘                                  │
@@ -254,6 +255,7 @@ agentic-payments-bot/
 │   │   ├── router.ts                 # Protocol router + AI output parser
 │   │   ├── x402/
 │   │   │   ├── client.ts             # x402 HTTP 402 client (paying for resources)
+│   │   │   ├── eip3009.ts            # EIP-3009 TransferWithAuthorization signer (EIP-712 via Viem)
 │   │   │   └── server.ts             # x402 paywall middleware & settlement (accepting payments)
 │   │   └── ap2/
 │   │       ├── client.ts             # AP2 mandate-based client (submitting mandates)
@@ -350,7 +352,9 @@ User/Agent input
      │ ETH / ERC-20  │ │ Stripe      │ │ Clients       │
      │               │ │ PayPal      │ │               │
      │ Direct chain  │ │ Visa / MC   │ │ x402: discover│
-     │ transactions  │ │ GPay / APay │ │ → sign → pay  │
+     │ transactions  │ │ GPay / APay │ │ → sign EIP-   │
+     │               │ │             │ │ 3009 (KMS key)│
+     │               │ │             │ │ → pay         │
      │               │ │             │ │ → get resource│
      │               │ │             │ │               │
      │               │ │             │ │ AP2: mandate  │
@@ -399,6 +403,8 @@ User/Agent input
     ┌─────────────────────┐                   │ POST /ap2/process-payment    │
     │ Validate payload:   │                   └────────────┬─────────────────┘
     │ • auth fields       │                                │
+    │ • EIP-3009 signed   │                                │
+    │   authorization     │                                │
     │ • amount ≥ required │                                │
     │ • time bounds       │                                │
     │ • payTo matches     │                                │
