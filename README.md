@@ -4,7 +4,7 @@
 
 # 🤖💵 Agentic Payment Service for Open Agent Skills Ecosystem.
 
-> A dual-protocol (x402 + AP2) agentic payment service for Open Agent Skills Ecosystem (including OpenClaw, Claude Code, Codex, Junie, OpenCode, GitHub Copilot, Gemini CLI, etc.),
+> A tri-protocol (x402 + AP2 + MPP) agentic payment service for Open Agent Skills Ecosystem (including OpenClaw, Claude Code, Codex, Junie, OpenCode, GitHub Copilot, Gemini CLI, etc.),
 > with web3 & web2 gateway support, EIP-3009 signed stablecoin authorizations (Viem), AWS KMS key management, policy engine compliance, audit trail, and human-in-the-loop confirmation.
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7+-blue.svg)](https://www.typescriptlang.org/)
@@ -139,10 +139,9 @@
 - [License](#license)
 
 ---
-
 ## Overview
 
-**agentic-payments-bot** is a payment serivce/gateway/bot/agent/assistant with support for and providing of X402 and AP2 server and client, and providing
+**agentic-payments-bot** is a payment serivce/gateway/bot/agent/assistant with support for and providing of X402, AP2, and MPP server and client, and providing
 an Open Agent Skills Ecosystem compliant skill, that enables AI agents to autonomously initiate, validate, and execute payments
 across both blockchain (web3) and traditional (web2) payment rails.
 
@@ -150,12 +149,12 @@ across both blockchain (web3) and traditional (web2) payment rails.
 
 | Capability | Details |
 |---|---|
-| **Dual protocol support** | x402 (HTTP 402 + onchain settlement) and AP2 (Google's mandate-based agent payments) |
-| **Dual role: server + client** | Acts as a **payment gateway** (accepts payments from external agents via x402/AP2 server endpoints) and as a **payment client** (makes payments to external services via all backends) |
+| **Triple protocol support** | x402 (HTTP 402 + onchain settlement), AP2 (Google's mandate-based agent payments), and MPP (Machine Payments Protocol — rail-agnostic quote → invoice → settle → receipt lifecycle with content-addressed invoices and signed receipts) |
+| **Dual role: server + client** | Acts as a **payment gateway** (accepts payments from external agents via x402/AP2/MPP server endpoints) and as a **payment client** (makes payments to external services via all backends) |
 | **Web3 transactions** | Ethereum, Base, Polygon via [Viem](https://viem.sh) — native ETH and ERC-20 (USDC, etc.) |
 | **EIP-3009 signing** | Full x402 client payment flow: EIP-712 `TransferWithAuthorization` signed via Viem with a private key decrypted through the configured KMS backend — the key never leaves the KMS trust boundary |
 | **Web2 gateways** | Stripe, PayPal, Visa Direct, Mastercard Send, Google Pay, Apple Pay |
-| **Protocol gateways** | x402 remote resource payment, AP2 remote mandate submission — paying any service that supports these protocols |
+| **Protocol gateways** | x402 remote resource payment, AP2 remote mandate submission, MPP remote invoice payment — paying any service that supports these protocols |
 | **Key management** | Pluggable KMS providers: AWS KMS, OS Keyring (KDE Wallet / GNOME Keyring / macOS Keychain / Windows Credential Manager), D-Bus Secret Service, GnuPG, Local AES-256-GCM |
 | **Policy engine** | Per-tx limits, daily/weekly/monthly aggregates, time-of-day, blacklist/whitelist, currency restrictions |
 | **Human-in-the-loop** | Automatic escalation on policy violations via CLI prompt, chat prompt, or web API |
@@ -177,9 +176,8 @@ across both blockchain (web3) and traditional (web2) payment rails.
 │  │                                                                             │  │
 │  │  External Agents ──► x402 Paywall Middleware (HTTP 402 flow)                │  │
 │  │                      AP2 Mandate Endpoints (mandate lifecycle)              │  │
-│  │                      MPP Endpoints (quote → invoice → settle → receipt) ──► │  │
-│  │                                                                   Payment   │  │
-│  │                                                                  Execution  │  │
+│  │                      MPP Endpoints (quote → invoice → settle →   ──► Payment│  │
+│  │                      receipt)                                     Execution │  │
 │  └─────────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                   │
 │  ┌───────────┐   ┌───────────────┐   ┌──────────┐                                 │
@@ -187,11 +185,11 @@ across both blockchain (web3) and traditional (web2) payment rails.
 │  └─────┬─────┘   └───────┬───────┘   └────┬─────┘                                 │
 │        │                 │                │                                       │
 │        ▼                 ▼                ▼                                       │
-│  ┌─────────────────────────────────────────────────┐                              │
-│  │              Protocol Router                    │                              │
-│  │  (AI output parser → PaymentIntent → routing)   │                              │
-│  └────┬──────────┬─────────┬──────────┬────────────┘                              │
-│       │          │         │          │                                           │
+│  ┌────────────────────────────────────────────────────┐                           │
+│  │              Protocol Router                       │                           │
+│  │  (AI output parser → PaymentIntent → routing)      │                           │
+│  └────┬──────────┬─────────┬──────────┬──────────┬────┘                           │
+│       │          │         │          │          │                                │
 │  ┌────▼───┐ ┌────▼───┐ ┌───▼────┐ ┌───▼────┐ ┌───▼────┐                           │
 │  │ web3   │ │ web2   │ │ x402   │ │ ap2    │ │ mpp    │                           │
 │  │(Viem)  │ │(Stripe │ │(remote │ │(remote │ │(remote │                           │
@@ -215,14 +213,13 @@ across both blockchain (web3) and traditional (web2) payment rails.
 │  ┌───────▼─────────────────────────────────────┐  ┌───────────────┐               │
 │  │          Payment Execution                  │  │  KMS Provider │               │
 │  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌──────┐  │  │ ┌───────────┐ │               │
-│  │  │ Viem   │ │ Stripe │ │ PayPal │ │ Visa │  │  │ │ AWS KMS   │ │               │
-│  │  │(ETH/   │ │        │ │        │ │ MC   │  │  │ │ OS Keyring│ │               │
-│  │  │ ERC20/ │ │        │ │        │ │ GPay │  │  │ │ D-Bus SS  │ │               │
-│  │  │ EIP-   │ │        │ │        │ │ APay │  │◄─│ │ GnuPG     │ │               │
-│  │  │ 3009)  │ │        │ │        │ │ x402 │  │  │ │ Local AES │ │               │
-│  │  │        │ │        │ │        │ │ AP2  │  │  │ └───────────┘ │               │
-│  │  └────────┘ └────────┘ └────────┘ └──────┘  │  └───────────────┘               │
-│  └──────────────┬──────────────────────────────┘                                  │
+│  │  │ Viem   │ │ Stripe │ │ Visa   │ │ x402 │  │  │ │ AWS KMS   │ │               │
+│  │  │(ETH/   │ │ PayPal │ │ MC     │ │ AP2  │  │  │ │ OS Keyring│ │               │
+│  │  │ ERC20/ │ │ GPay   │ │        │ │ MPP  │  │  │ │ D-Bus SS  │ │               │
+│  │  │ EIP-   │ │ APay   │ │        │ │      │  │◄─│ │ GnuPG     │ │               │
+│  │  │ 3009)  │ │        │ │        │ │      │  │  │ │ Local AES │ │               │
+│  │  └────────┘ └────────┘ └────────┘ └──────┘  │  │ └───────────┘ │               │
+│  └──────────────┬──────────────────────────────┘  └───────────────┘               │
 │                 │                                                                 │
 │  ┌──────────────▼──────────────────────────────┐                                  │
 │  │                  SQLite                     │                                  │
@@ -257,9 +254,13 @@ agentic-payments-bot/
 │   │   │   ├── client.ts             # x402 HTTP 402 client (paying for resources)
 │   │   │   ├── eip3009.ts            # EIP-3009 TransferWithAuthorization signer (EIP-712 via Viem)
 │   │   │   └── server.ts             # x402 paywall middleware & settlement (accepting payments)
-│   │   └── ap2/
-│   │       ├── client.ts             # AP2 mandate-based client (submitting mandates)
-│   │       └── server.ts             # AP2 mandate lifecycle server (processing mandates)
+│   │   ├── ap2/
+│   │   │   ├── client.ts             # AP2 mandate-based client (submitting mandates)
+│   │   │   └── server.ts             # AP2 mandate lifecycle server (processing mandates)
+│   │   └── mpp/
+│   │       ├── types.ts              # MPP shared types (Quote, Invoice, SettleRequest, Receipt)
+│   │       ├── client.ts             # MPP client (quote → invoice → settle → receipt)
+│   │       └── server.ts             # MPP server (content-addressed invoices, signed receipts, rail dispatch)
 │   ├── payments/
 │   │   ├── web3/
 │   │   │   └── ethereum.ts           # Viem-based ETH/ERC-20 tx producer
@@ -311,7 +312,8 @@ User/Agent input
                          ┌──────────────────────┐
                          │   Protocol Router    │
                          │ (detect gateway:     │
-                         │  web3/web2/x402/ap2) │
+                         │  web3/web2/x402/     │
+                         │  ap2/mpp)            │
                          └──────────┬───────────┘
                                     │
                                     ▼
@@ -360,6 +362,11 @@ User/Agent input
      │               │ │             │ │ AP2: mandate  │
      │               │ │             │ │ → sign → cred │
      │               │ │             │ │ → submit      │
+     │               │ │             │ │               │
+     │               │ │             │ │ MPP: quote    │
+     │               │ │             │ │ → invoice     │
+     │               │ │             │ │ → settle(rail)│
+     │               │ │             │ │ → receipt     │
      └────────┬──────┘ └──────┬──────┘ └───────┬───────┘
               │               │                │
               └───────────────┼────────────────┘
@@ -375,57 +382,57 @@ User/Agent input
 ```
                     ┌──────────────────────────────────────┐
                     │       External Agent Request         │
-                    └───────────┬──────────┬───────────────┘
-                                │          │
-               x402 path        │          │        AP2 path
-         ┌──────────────────────┘          └──────────────────────┐
-         │                                                        │
-         ▼                                                        ▼
-┌────────────────────────┐                          ┌──────────────────────────┐
-│ GET /x402/premium/data │                          │ POST /ap2/mandates       │
-│ (any paywall route)    │                          │ (accept mandate)         │
-└───────────┬────────────┘                          └────────────┬─────────────┘
-            │                                                    │
-     ┌──────┴──────┐                                             ▼
-     │ X-PAYMENT   │                              ┌──────────────────────────┐
-     │ header?     │                              │ POST /ap2/sign-mandate   │
-     └──┬──────┬───┘                              │ (credential provider)    │
-     no │      │ yes                              └────────────┬─────────────┘
-        ▼      │                                               │
- ┌────────────┐│                                               ▼
- │ HTTP 402   ││                              ┌──────────────────────────────┐
- │ + payment  ││                              │ POST /ap2/payment-credentials│
- │ requirem.  ││                              │ (issue scoped tokens)        │
- │ in X-PAY-  ││                              └────────────┬─────────────────┘
- │ MENT hdr   ││                                           │
- └────────────┘│                                           ▼
-               ▼                              ┌──────────────────────────────┐
-    ┌─────────────────────┐                   │ POST /ap2/process-payment    │
-    │ Validate payload:   │                   └────────────┬─────────────────┘
-    │ • auth fields       │                                │
-    │ • EIP-3009 signed   │                                │
-    │   authorization     │                                │
-    │ • amount ≥ required │                                │
-    │ • time bounds       │                                │
-    │ • payTo matches     │                                │
-    └──────────┬──────────┘                                │
-               │                                           │
-               ▼                                           ▼
-    ┌─────────────────────┐             ┌──────────────────────────────┐
-    │ Submit to on-chain  │             │ Route to internal backend:   │
-    │ facilitator for     │             │ • stripe  • paypal  • card   │
-    │ settlement          │             │ • crypto (Viem ETH/ERC-20)   │
-    └──────────┬──────────┘             └──────────────┬───────────────┘
-               │                                       │
-               ▼                                       ▼
-    ┌─────────────────────┐             ┌──────────────────────────────┐
-    │ HTTP 200            │             │ Return AP2PaymentResult:     │
-    │ + resource data     │             │ { mandate_id, status,        │
-    │ + X-PAYMENT-RESPONSE│             │   transaction_id, receipt }  │
-    │   (settlement proof)│             └──────────────┬───────────────┘
-    └──────────┬──────────┘                            │
-               │                                       │
-               └──────────────┬────────────────────────┘
+                    └──────┬──────────┬──────────┬─────────┘
+                           │          │          │
+              x402 path    │          │ AP2 path │  MPP path
+         ┌─────────────────┘          │          └───────────────────┐
+         │                            │                              │
+         ▼                            ▼                              ▼
+┌────────────────────────┐ ┌──────────────────────────┐ ┌──────────────────────────┐
+│ GET /x402/premium/data │ │ POST /ap2/mandates       │ │ POST /mpp/quote          │
+│ (any paywall route)    │ │ (accept mandate)         │ │ (issue quote)            │
+└───────────┬────────────┘ └────────────┬─────────────┘ └────────────┬─────────────┘
+            │                           │                            │
+     ┌──────┴──────┐                    ▼                            ▼
+     │ X-PAYMENT   │      ┌──────────────────────────┐ ┌──────────────────────────┐
+     │ header?     │      │ POST /ap2/sign-mandate   │ │ POST /mpp/invoice        │
+     └──┬──────┬───┘      │ (credential provider)    │ │ (content-addressed,      │
+     no │      │ yes      └────────────┬─────────────┘ │  signed invoice)         │
+        ▼      │                       │               └────────────┬─────────────┘
+ ┌────────────┐│                       ▼                            │
+ │ HTTP 402   ││      ┌──────────────────────────────┐              ▼
+ │ + payment  ││      │ POST /ap2/payment-credentials│ ┌──────────────────────────┐
+ │ requirem.  ││      │ (issue scoped tokens)        │ │ POST /mpp/settle         │
+ │ in X-PAY-  ││      └────────────┬─────────────────┘ │ (rail: x402 / stripe /   │
+ │ MENT hdr   ││                   │                   │  paypal / card / crypto) │
+ └────────────┘│                   ▼                   └────────────┬─────────────┘
+               ▼            ┌────────────────────────────┐          │
+    ┌─────────────────────┐ │ POST /ap2/process-payment  │          ▼
+    │ Validate payload:   │ └────────────┬───────────────┘ ┌────────────────────────┐
+    │ • auth fields       │              │                 │ GET /mpp/receipt/:id   │
+    │ • EIP-3009 signed   │              │                 │ (signed receipt)       │
+    │   authorization     │              │                 └────────────┬───────────┘
+    │ • amount ≥ required │              │                              │
+    │ • time bounds       │              │                              │
+    │ • payTo matches     │              │                              │
+    └──────────┬──────────┘              │                              │
+               │                         │                              │
+               ▼                         ▼                              ▼
+    ┌─────────────────────┐ ┌──────────────────────────────┐ ┌──────────────────────────┐
+    │ Submit to on-chain  │ │ Route to internal backend:   │ │ Settle on chosen rail:   │
+    │ facilitator for     │ │ • stripe  • paypal  • card   │ │ • x402 → facilitator     │
+    │ settlement          │ │ • crypto (Viem ETH/ERC-20)   │ │ • stripe/paypal/card     │
+    └──────────┬──────────┘ └──────────────┬───────────────┘ │ • crypto (tx reference)  │
+               │                           │                 └──────────────┬───────────┘
+               ▼                           ▼                                │
+    ┌─────────────────────┐ ┌──────────────────────────────┐               │
+    │ HTTP 200            │ │ Return AP2PaymentResult:     │               ▼
+    │ + resource data     │ │ { mandate_id, status,        │ ┌──────────────────────────┐
+    │ + X-PAYMENT-RESPONSE│ │   transaction_id, receipt }  │ │ Return MPPReceipt:       │
+    │   (settlement proof)│ └──────────────┬───────────────┘ │ { receipt_id, status,    │
+    └──────────┬──────────┘                │                 │   rail_reference, sig }  │
+               │                           │                 └──────────────┬───────────┘
+               └──────────────┬────────────┴────────────────────────────────┘
                               │
                    ┌──────────▼──────────┐
                    │  Audit Log (SQLite  │
